@@ -39,16 +39,34 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
     }
   });
 
-  // Guarda o payload do submit atual para poder enfileirar se a aba ficar oculta
-  const pendingPayloadRef = useRef<any>(null);
-  const hasQueuedRef = useRef<boolean>(false);
+  // Rastrear se a página perdeu foco desde que o modal abriu
+  const hasLostFocusRef = useRef<boolean>(false);
+  const wasHiddenRef = useRef<boolean>(document.hidden);
 
-  // Limpar erros quando o modal abre
+  // Limpar erros e resetar flag de foco quando o modal abre
   useEffect(() => {
     if (open) {
       clearError();
+      hasLostFocusRef.current = false;
+      wasHiddenRef.current = document.hidden;
     }
   }, [open, clearError]);
+
+  // Monitorar mudanças de visibilidade da página
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && !wasHiddenRef.current) {
+        console.log('👁️ Página perdeu foco, marcando flag...');
+        hasLostFocusRef.current = true;
+      }
+      wasHiddenRef.current = document.hidden;
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
 
 
@@ -90,9 +108,9 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       console.log("📝 Criando pedido com total:", total);
 
-      // Verificar se a página perdeu foco
-      if (document.hidden) {
-        console.log('🔄 Página perdeu foco, recarregando perfil em segundo plano...');
+      // Verificar se a página perdeu foco desde que o modal abriu
+      if (hasLostFocusRef.current || document.hidden) {
+        console.log('🔄 Página perdeu foco anteriormente, recarregando perfil em segundo plano...');
 
         try {
           // Recarregar o perfil do usuário em segundo plano
@@ -103,6 +121,9 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
           } else {
             console.log('✅ Perfil recarregado:', reloadedUser.id);
           }
+
+          // Resetar a flag após recarregar
+          hasLostFocusRef.current = false;
         } catch (err) {
           console.warn('⚠️ Erro ao recarregar perfil:', err);
         }
