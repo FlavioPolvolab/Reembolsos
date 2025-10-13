@@ -229,15 +229,20 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
     if (result) {
       console.log("🎉 Pedido criado com sucesso!");
-      
+
       // Limpar formulário
       setTitle("");
       setDescription("");
       setItems([]);
       setFiles([]);
-      
+
       if (onSuccess) onSuccess();
       onOpenChange(false);
+
+      // Recarregar a página após fechar o modal
+      setTimeout(() => {
+        window.location.reload();
+      }, 300);
     }
   };
 
