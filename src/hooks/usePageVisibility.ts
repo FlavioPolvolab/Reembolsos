@@ -21,12 +21,7 @@ export function usePageVisibility(): UsePageVisibilityReturn {
 
   const checkConnection = useCallback(async (): Promise<boolean> => {
     try {
-      const sessionPromise = supabase.auth.getSession();
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('SESSION_CHECK_TIMEOUT')), 3000)
-      );
-
-      const { data: { session }, error } = await Promise.race([sessionPromise, timeoutPromise]) as any;
+      const { data: { session }, error } = await supabase.auth.getSession();
 
       if (error || !session) {
         console.warn('Sessão inválida detectada:', error);
@@ -35,10 +30,6 @@ export function usePageVisibility(): UsePageVisibilityReturn {
 
       return true;
     } catch (err: any) {
-      if (err?.message === 'SESSION_CHECK_TIMEOUT') {
-        console.warn('Verificação de conexão demorou, assumindo conectado');
-        return true;
-      }
       console.error('Erro ao verificar conexão:', err);
       return false;
     }
@@ -54,18 +45,12 @@ export function usePageVisibility(): UsePageVisibilityReturn {
     try {
       console.log('🔄 Verificando e renovando conexão...');
 
-      await new Promise(resolve => setTimeout(resolve, 500));
+      await new Promise(resolve => setTimeout(resolve, 300));
 
       try {
-        const refreshPromise = supabase.auth.refreshSession();
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 5000)
-        );
-        await Promise.race([refreshPromise, timeoutPromise]);
+        await supabase.auth.refreshSession();
       } catch (e: any) {
-        if (e?.message !== 'REFRESH_TIMEOUT') {
-          console.warn('Refresh de sessão falhou, continuando:', e?.message);
-        }
+        console.warn('Refresh de sessão falhou, continuando:', e?.message);
       }
 
       const connected = await checkConnection();
@@ -98,7 +83,7 @@ export function usePageVisibility(): UsePageVisibilityReturn {
       setIsVisible(isNowVisible);
       
       if (isNowVisible && !wasVisible) {
-        if (now - lastVisibilityChangeRef.current < 3000) {
+        if (now - lastVisibilityChangeRef.current < 5000) {
           console.log('Ignorando mudança de visibilidade (muito recente)');
           return;
         }
@@ -112,7 +97,7 @@ export function usePageVisibility(): UsePageVisibilityReturn {
         refreshTimeoutRef.current = setTimeout(async () => {
           console.log('👁️ Página recebeu foco, verificando conexão...');
           await refreshConnection();
-        }, 2000);
+        }, 1000);
       }
       
       // Se a página ficou oculta, marcar como potencialmente desconectada

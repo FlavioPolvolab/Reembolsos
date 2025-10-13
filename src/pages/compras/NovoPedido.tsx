@@ -100,7 +100,6 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
     console.log("🚀 Iniciando criação do pedido...");
 
     const result = await submitWithRetry(async () => {
-      // 1. Criar pedido
       const total = items.reduce((sum, item) => {
         const preco = Number(item.price);
         return sum + (isNaN(preco) ? 0 : preco * item.quantity);
@@ -108,7 +107,33 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       console.log("📝 Criando pedido com total:", total);
 
-      // Criar pedido direto via Supabase
+      // Tentar via Edge Function primeiro (mais rápido, transacional)
+      try {
+        const invokePayload = {
+          title,
+          description,
+          user_id: user.id,
+          items: items.map(it => ({ name: it.name, quantity: it.quantity, price: Number(it.price) }))
+        };
+
+        console.log('🚀 Tentando criar pedido via Edge Function...');
+
+        const { data: fnData, error: fnError } = await Promise.race([
+          (supabase as any).functions.invoke('create_purchase_order', { body: invokePayload }),
+          new Promise<any>((_, reject) => setTimeout(() => reject(new Error('EDGE_FUNCTION_TIMEOUT')), 15000))
+        ]);
+
+        if (!fnError && fnData?.order?.id) {
+          console.log('✅ Pedido criado via Edge Function:', fnData.order.id);
+          return fnData.order;
+        }
+
+        console.warn('⚠️ Edge Function falhou ou timeout, usando fallback:', fnError?.message || 'timeout');
+      } catch (edgeErr: any) {
+        console.warn('⚠️ Edge Function error, usando fallback:', edgeErr?.message || edgeErr);
+      }
+
+      // Fallback: criar pedido via SDK ou fetch nativo
       const createOrderDirect = async () => {
         const { data: sess } = await supabase.auth.getSession();
         const token = (sess as any)?.session?.access_token;
@@ -141,30 +166,34 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
         return json?.[0];
       };
 
+      console.log('🔄 Usando fallback para criar pedido...');
       let data: any = null;
-      const sdkInsert = supabase
-        .from("purchase_orders")
-        .insert({
-          title,
-          description,
-          total_amount: total,
-          user_id: user.id,
-        })
-        .select()
-        .single();
-
-      const insertWithTimeout = Promise.race([
-        sdkInsert,
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('INSERT_TIMEOUT')), 20000)),
-      ]);
 
       try {
+        const sdkInsert = supabase
+          .from("purchase_orders")
+          .insert({
+            title,
+            description,
+            total_amount: total,
+            user_id: user.id,
+          })
+          .select()
+          .single();
+
+        const insertWithTimeout = Promise.race([
+          sdkInsert,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('INSERT_TIMEOUT')), 10000)),
+        ]);
+
         const res: any = await insertWithTimeout;
         data = res?.data ?? res;
         if (res?.error) throw res.error;
+
+        console.log('✅ Pedido criado via SDK:', data.id);
       } catch (err: any) {
         if ((err?.message || '') === 'INSERT_TIMEOUT') {
-          console.warn('⏩ Fallback para fetch nativo (keepalive)');
+          console.warn('⏩ SDK timeout, usando fetch nativo (keepalive)');
           data = await createOrderDirect();
         } else {
           throw err;

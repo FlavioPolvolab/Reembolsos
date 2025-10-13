@@ -86,30 +86,19 @@ export function useResilientSubmit<T = any>(options: ResilientSubmitOptions = {}
           }
 
           // Verificar sessão antes de cada tentativa
-          console.log('🔐 Verificando sessão antes do envio...');
-          let sessionOk = false;
-          try {
-            const sessionRace = await Promise.race([
-              supabase.auth.getSession(),
-              new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 5000))
-            ] as const);
-            const { data: { session }, error: sessionError } = sessionRace as any;
-            if (!sessionError && !!session) {
-              sessionOk = true;
-            }
-          } catch (e: any) {
-            if (e?.message === 'SESSION_TIMEOUT') {
-              console.warn('⏱️ Verificação de sessão demorou. Prosseguindo com o envio.');
-              sessionOk = true;
-            } else {
-              console.warn('⚠️ Falha ao verificar sessão. Prosseguindo com o envio:', e?.message || e);
-              sessionOk = true;
+          if (attempt === 1) {
+            console.log('🔐 Verificando sessão antes do envio...');
+            try {
+              const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+              if (sessionError || !session) {
+                throw new Error('Sessão inválida. Faça login novamente.');
+              }
+              console.log('🔐 Sessão válida.');
+            } catch (e: any) {
+              console.warn('⚠️ Erro ao verificar sessão:', e?.message || e);
+              throw new Error('Sessão inválida. Faça login novamente.');
             }
           }
-          if (!sessionOk) {
-            throw new Error('Sessão inválida. Faça login novamente.');
-          }
-          console.log('🔐 Sessão verificada/assumida válida.');
 
           // Executar a função de submit com timeout
           const timeoutPromise = new Promise<never>((_, reject) => {
