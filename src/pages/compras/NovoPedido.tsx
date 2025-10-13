@@ -90,6 +90,24 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       console.log("📝 Criando pedido com total:", total);
 
+      // Verificar se a página perdeu foco
+      if (document.hidden) {
+        console.log('🔄 Página perdeu foco, recarregando perfil em segundo plano...');
+
+        try {
+          // Recarregar o perfil do usuário em segundo plano
+          const { data: { user: reloadedUser }, error: userError } = await supabase.auth.getUser();
+
+          if (userError || !reloadedUser) {
+            console.warn('⚠️ Erro ao recarregar perfil:', userError);
+          } else {
+            console.log('✅ Perfil recarregado:', reloadedUser.id);
+          }
+        } catch (err) {
+          console.warn('⚠️ Erro ao recarregar perfil:', err);
+        }
+      }
+
       // Obter token da sessão atual
       const { data: sess } = await supabase.auth.getSession();
       const token = (sess as any)?.session?.access_token;
@@ -97,6 +115,8 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
       if (!token) {
         throw new Error('Sessão inválida. Faça login novamente.');
       }
+
+      console.log('🚀 Iniciando envio direto...');
 
       // Criar pedido diretamente via fetch com o token atual
       const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/purchase_orders`;
