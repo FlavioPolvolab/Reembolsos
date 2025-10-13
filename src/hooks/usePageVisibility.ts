@@ -21,25 +21,24 @@ export function usePageVisibility(): UsePageVisibilityReturn {
 
   const checkConnection = useCallback(async (): Promise<boolean> => {
     try {
-      const { data: { session }, error } = await supabase.auth.getSession();
-      
+      const sessionPromise = supabase.auth.getSession();
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('SESSION_CHECK_TIMEOUT')), 3000)
+      );
+
+      const { data: { session }, error } = await Promise.race([sessionPromise, timeoutPromise]) as any;
+
       if (error || !session) {
         console.warn('Sessão inválida detectada:', error);
         return false;
       }
-      
-      // Preflight rápido (HEAD) para acordar o PostgREST sem custo
-      const { error: testError } = await supabase
-        .from('purchase_orders')
-        .select('id', { head: true, count: 'exact' });
-      
-      if (testError) {
-        console.warn('Erro de conectividade detectado:', testError);
-        return false;
-      }
-      
+
       return true;
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.message === 'SESSION_CHECK_TIMEOUT') {
+        console.warn('Verificação de conexão demorou, assumindo conectado');
+        return true;
+      }
       console.error('Erro ao verificar conexão:', err);
       return false;
     }
@@ -47,24 +46,30 @@ export function usePageVisibility(): UsePageVisibilityReturn {
 
   const refreshConnection = useCallback(async (): Promise<void> => {
     if (isProcessingRef.current) return;
-    
+
     isProcessingRef.current = true;
     setIsRefreshing(true);
     setConnectionError(null);
-    
+
     try {
       console.log('🔄 Verificando e renovando conexão...');
-      
-      // Aguardar um pouco para estabilizar
-      await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // Forçar refresh do token antes do preflight
+      await new Promise(resolve => setTimeout(resolve, 500));
+
       try {
-        await supabase.auth.refreshSession();
-      } catch (_) {}
-      
+        const refreshPromise = supabase.auth.refreshSession();
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('REFRESH_TIMEOUT')), 5000)
+        );
+        await Promise.race([refreshPromise, timeoutPromise]);
+      } catch (e: any) {
+        if (e?.message !== 'REFRESH_TIMEOUT') {
+          console.warn('Refresh de sessão falhou, continuando:', e?.message);
+        }
+      }
+
       const connected = await checkConnection();
-      
+
       if (connected) {
         setIsConnected(true);
         setConnectionError(null);
@@ -92,26 +97,22 @@ export function usePageVisibility(): UsePageVisibilityReturn {
       
       setIsVisible(isNowVisible);
       
-      // Se a página ficou visível após estar oculta
       if (isNowVisible && !wasVisible) {
-        // Evitar múltiplas verificações em sequência
-        if (now - lastVisibilityChangeRef.current < 2000) {
+        if (now - lastVisibilityChangeRef.current < 3000) {
           console.log('Ignorando mudança de visibilidade (muito recente)');
           return;
         }
-        
+
         lastVisibilityChangeRef.current = now;
-        
-        // Limpar timeout anterior se existir
+
         if (refreshTimeoutRef.current) {
           clearTimeout(refreshTimeoutRef.current);
         }
-        
-        // Aguardar um pouco antes de verificar a conexão
+
         refreshTimeoutRef.current = setTimeout(async () => {
           console.log('👁️ Página recebeu foco, verificando conexão...');
           await refreshConnection();
-        }, 1500);
+        }, 2000);
       }
       
       // Se a página ficou oculta, marcar como potencialmente desconectada

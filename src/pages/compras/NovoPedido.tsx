@@ -29,13 +29,11 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
   const [itemQty, setItemQty] = useState(1);
   const [itemPrice, setItemPrice] = useState("");
 
-  // Hooks para gerenciar visibilidade e submissão resiliente
   const { isVisible, isConnected, isRefreshing, connectionError, refreshConnection } = usePageVisibility();
   const { isSubmitting, error, submitWithRetry, clearError, cancelSubmit } = useResilientSubmit({
-    maxRetries: 3,
+    maxRetries: 2,
     retryDelay: 2000,
-    // Deixa o timeout externo bem alto; gerenciamos timeouts internos por operação
-    timeoutMs: 120000,
+    timeoutMs: 60000,
     onRetry: (attempt, error) => {
       console.log(`🔄 Tentativa ${attempt} falhou:`, error.message);
     },
@@ -65,55 +63,6 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
     }
   }, [isVisible, isSubmitting, cancelSubmit]);
 
-  // Auto-envio de pedidos pendentes ao voltar o foco
-  useEffect(() => {
-    const trySendPending = async () => {
-      if (document.hidden) return;
-      try {
-        const raw = localStorage.getItem('pending_purchase_order');
-        if (!raw) return;
-        const pending = JSON.parse(raw);
-        localStorage.removeItem('pending_purchase_order');
-        console.log('⏫ Enviando pedido pendente ao voltar o foco...');
-        const { data: fnData, error: fnError } = await (supabase as any).functions.invoke('create_purchase_order', {
-          body: pending
-        });
-        if (fnError) throw fnError;
-        if (fnData?.order?.id) {
-          console.log('✅ Pedido pendente enviado:', fnData.order.id);
-        }
-      } catch (e) {
-        console.warn('⚠️ Falha ao enviar pendente:', (e as any)?.message || e);
-      }
-    };
-    const onVisibility = () => { if (!document.hidden) void trySendPending(); };
-    const onFocus = () => { void trySendPending(); };
-    const intervalId = window.setInterval(() => { void trySendPending(); }, 3000);
-    document.addEventListener('visibilitychange', onVisibility);
-    window.addEventListener('focus', onFocus);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisibility);
-      window.removeEventListener('focus', onFocus);
-      window.clearInterval(intervalId);
-    };
-  }, []);
-
-  // Se a aba ficar oculta durante um envio, enfileira automaticamente o payload atual
-  useEffect(() => {
-    const onHidden = async () => {
-      if (document.hidden && isSubmitting && pendingPayloadRef.current && !hasQueuedRef.current) {
-        try {
-          const { data: sess } = await supabase.auth.getSession();
-          const access_token = (sess as any)?.session?.access_token;
-          localStorage.setItem('pending_purchase_order', JSON.stringify({ ...pendingPayloadRef.current, access_token }));
-          hasQueuedRef.current = true;
-          console.log('💾 Pedido atual armazenado porque a aba ficou oculta.');
-        } catch {}
-      }
-    };
-    document.addEventListener('visibilitychange', onHidden);
-    return () => document.removeEventListener('visibilitychange', onHidden);
-  }, [isSubmitting]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files) {
@@ -151,15 +100,6 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
     console.log("🚀 Iniciando criação do pedido...");
 
     const result = await submitWithRetry(async () => {
-      // Preflight muito rápido para garantir que o PostgREST esteja "acordado"
-      try {
-        await Promise.race([
-          supabase.from("purchase_orders").select("id", { head: true, count: "exact" }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("PREFLIGHT_TIMEOUT")), 3000))
-        ]);
-      } catch (e) {
-        console.warn("⚠️ Preflight falhou/demorou, prosseguindo mesmo assim...", (e as any)?.message || e);
-      }
       // 1. Criar pedido
       const total = items.reduce((sum, item) => {
         const preco = Number(item.price);
@@ -168,65 +108,7 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       console.log("📝 Criando pedido com total:", total);
 
-      // Primeiro, tente via Edge Function (1 chamada transacional)
-      try {
-        const invokePayload = {
-          title,
-          description,
-          user_id: user.id,
-          items: items.map(it => ({ name: it.name, quantity: it.quantity, price: Number(it.price) }))
-        };
-        pendingPayloadRef.current = invokePayload;
-        hasQueuedRef.current = false;
-
-        // Helper para enfileirar
-        const queuePending = async () => {
-          const { data: sess } = await supabase.auth.getSession();
-          const access_token = (sess as any)?.session?.access_token;
-          localStorage.setItem('pending_purchase_order', JSON.stringify({ ...invokePayload, access_token }));
-          console.log('💾 Pedido armazenado para envio quando a aba voltar.');
-          return { id: 'queued' } as any;
-        };
-
-        // Se a aba estiver oculta, persistir para envio automático quando voltar ao foco
-        if (typeof document !== 'undefined' && document.hidden) {
-          return await queuePending();
-        }
-
-        const { data: fnData, error: fnError } = await (supabase as any).functions.invoke('create_purchase_order', {
-          body: invokePayload
-        });
-
-        if (fnError) {
-          // Se falhou e a aba está oculta ou houve timeout/rede, enfileira para envio automático
-          if (typeof document !== 'undefined' && document.hidden) {
-            return await queuePending();
-          }
-          const msg = String(fnError?.message || '').toLowerCase();
-          if (msg.includes('timeout') || msg.includes('fetch') || msg.includes('network')) {
-            return await queuePending();
-          }
-          throw fnError;
-        }
-        pendingPayloadRef.current = null;
-        if (fnData?.order?.id) {
-          return fnData.order;
-        }
-      } catch (edgeErr: any) {
-        console.warn('⚠️ Edge function falhou, caindo para insert direto:', edgeErr?.message || edgeErr);
-        // Gatilho final de fila se falhou por qualquer motivo
-        if (pendingPayloadRef.current && !hasQueuedRef.current) {
-          try {
-            const { data: sess } = await supabase.auth.getSession();
-            const access_token = (sess as any)?.session?.access_token;
-            localStorage.setItem('pending_purchase_order', JSON.stringify({ ...pendingPayloadRef.current, access_token }));
-            hasQueuedRef.current = true;
-            console.log('💾 Pedido armazenado após erro de envio.');
-          } catch {}
-        }
-      }
-
-      // Função fallback com fetch nativo (keepalive) para contornar throttling
+      // Criar pedido direto via Supabase
       const createOrderDirect = async () => {
         const { data: sess } = await supabase.auth.getSession();
         const token = (sess as any)?.session?.access_token;
@@ -260,7 +142,6 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
       };
 
       let data: any = null;
-      // Timeout curto para o insert via SDK. Se estourar, cai no fallback keepalive
       const sdkInsert = supabase
         .from("purchase_orders")
         .insert({
@@ -274,12 +155,12 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       const insertWithTimeout = Promise.race([
         sdkInsert,
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('INSERT_TIMEOUT')), 15000)),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('INSERT_TIMEOUT')), 20000)),
       ]);
 
       try {
         const res: any = await insertWithTimeout;
-        data = res?.data ?? res; // res é do SDK ({data,error}) quando não estoura
+        data = res?.data ?? res;
         if (res?.error) throw res.error;
       } catch (err: any) {
         if ((err?.message || '') === 'INSERT_TIMEOUT') {

@@ -21,8 +21,8 @@ interface ResilientSubmitReturn<T> {
 export function useResilientSubmit<T = any>(options: ResilientSubmitOptions = {}): ResilientSubmitReturn<T> {
   const {
     maxRetries = 3,
-    retryDelay = 1000,
-    timeoutMs = 30000,
+    retryDelay = 2000,
+    timeoutMs = 45000,
     onRetry,
     onSuccess,
     onError
@@ -91,9 +91,8 @@ export function useResilientSubmit<T = any>(options: ResilientSubmitOptions = {}
           try {
             const sessionRace = await Promise.race([
               supabase.auth.getSession(),
-              new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 3000))
+              new Promise<never>((_, reject) => setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 5000))
             ] as const);
-            // sessionRace é o retorno de getSession
             const { data: { session }, error: sessionError } = sessionRace as any;
             if (!sessionError && !!session) {
               sessionOk = true;
@@ -101,7 +100,7 @@ export function useResilientSubmit<T = any>(options: ResilientSubmitOptions = {}
           } catch (e: any) {
             if (e?.message === 'SESSION_TIMEOUT') {
               console.warn('⏱️ Verificação de sessão demorou. Prosseguindo com o envio.');
-              sessionOk = true; // Prossegue, o Supabase client ainda enviará o token atual
+              sessionOk = true;
             } else {
               console.warn('⚠️ Falha ao verificar sessão. Prosseguindo com o envio:', e?.message || e);
               sessionOk = true;
