@@ -43,29 +43,23 @@ export function usePageVisibility(): UsePageVisibilityReturn {
     setConnectionError(null);
 
     try {
-      console.log('🔄 Verificando e renovando conexão...');
+      console.log('🔄 Verificando conexão...');
 
       await new Promise(resolve => setTimeout(resolve, 300));
-
-      try {
-        await supabase.auth.refreshSession();
-      } catch (e: any) {
-        console.warn('Refresh de sessão falhou, continuando:', e?.message);
-      }
 
       const connected = await checkConnection();
 
       if (connected) {
         setIsConnected(true);
         setConnectionError(null);
-        console.log('✅ Conexão restaurada com sucesso');
+        console.log('✅ Conexão verificada com sucesso');
       } else {
         setIsConnected(false);
         setConnectionError('Conexão perdida. Tente recarregar a página.');
-        console.warn('❌ Falha ao restaurar conexão');
+        console.warn('❌ Falha na verificação de conexão');
       }
     } catch (err) {
-      console.error('Erro ao renovar conexão:', err);
+      console.error('Erro ao verificar conexão:', err);
       setIsConnected(false);
       setConnectionError('Erro ao verificar conexão. Tente recarregar a página.');
     } finally {
@@ -79,12 +73,12 @@ export function usePageVisibility(): UsePageVisibilityReturn {
       const now = Date.now();
       const wasVisible = isVisible;
       const isNowVisible = !document.hidden;
-      
+
       setIsVisible(isNowVisible);
-      
+
       if (isNowVisible && !wasVisible) {
-        if (now - lastVisibilityChangeRef.current < 5000) {
-          console.log('Ignorando mudança de visibilidade (muito recente)');
+        if (now - lastVisibilityChangeRef.current < 10000) {
+          console.log('[usePageVisibility] Mudança de visibilidade ignorada (muito recente)');
           return;
         }
 
@@ -95,15 +89,13 @@ export function usePageVisibility(): UsePageVisibilityReturn {
         }
 
         refreshTimeoutRef.current = setTimeout(async () => {
-          console.log('👁️ Página recebeu foco, verificando conexão...');
+          console.log('[usePageVisibility] Verificando conexão após retorno de foco');
           await refreshConnection();
-        }, 1000);
+        }, 2000);
       }
-      
-      // Se a página ficou oculta, marcar como potencialmente desconectada
+
       if (!isNowVisible && wasVisible) {
-        console.log('👁️ Página perdeu foco, conexão pode ser afetada');
-        // Não marcar como desconectada imediatamente, apenas avisar
+        console.log('[usePageVisibility] Página perdeu foco');
       }
     };
 
@@ -128,18 +120,14 @@ export function usePageVisibility(): UsePageVisibilityReturn {
     };
   }, [isVisible, refreshConnection, checkConnection]);
 
-  // Monitorar mudanças na sessão do Supabase
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log(`[Auth State Change] Event: ${event}`, session ? 'Sessão válida' : 'Sessão inválida');
-      
-      if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
-        setIsConnected(!!session);
-        if (!session) {
-          setConnectionError('Sessão expirada. Faça login novamente.');
-        } else {
-          setConnectionError(null);
-        }
+      if (event === 'SIGNED_OUT') {
+        setIsConnected(false);
+        setConnectionError('Sessão expirada. Faça login novamente.');
+      } else if (event === 'TOKEN_REFRESHED' && session) {
+        setIsConnected(true);
+        setConnectionError(null);
       }
     });
 

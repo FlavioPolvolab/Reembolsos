@@ -108,35 +108,13 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       console.log("📝 Criando pedido com total:", total);
 
-      // Verificar se a página perdeu foco desde que o modal abriu
-      if (hasLostFocusRef.current || document.hidden) {
-        console.log('🔄 Página perdeu foco anteriormente, recarregando perfil em segundo plano...');
+      const { data: sess, error: sessionError } = await supabase.auth.getSession();
 
-        try {
-          // Recarregar o perfil do usuário em segundo plano
-          const { data: { user: reloadedUser }, error: userError } = await supabase.auth.getUser();
-
-          if (userError || !reloadedUser) {
-            console.warn('⚠️ Erro ao recarregar perfil:', userError);
-          } else {
-            console.log('✅ Perfil recarregado:', reloadedUser.id);
-          }
-
-          // Resetar a flag após recarregar
-          hasLostFocusRef.current = false;
-        } catch (err) {
-          console.warn('⚠️ Erro ao recarregar perfil:', err);
-        }
-      }
-
-      // Obter token da sessão atual
-      const { data: sess } = await supabase.auth.getSession();
-      const token = (sess as any)?.session?.access_token;
-
-      if (!token) {
+      if (sessionError || !sess?.session) {
         throw new Error('Sessão inválida. Faça login novamente.');
       }
 
+      const token = sess.session.access_token;
       console.log('🚀 Iniciando envio direto...');
 
       // Criar pedido diretamente via fetch com o token atual

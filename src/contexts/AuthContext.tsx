@@ -43,9 +43,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [isAdmin, setIsAdmin] = useState(false);
   const [userRoles, setUserRoles] = useState<UserRole[]>([]);
 
+  const isFetchingRef = React.useRef(false);
+  const lastFetchTimeRef = React.useRef<number>(0);
+  const fetchCountRef = React.useRef<number>(0);
+
   useEffect(() => {
-    let initialLoad = true;
-    // Get initial session
+    let initialLoadDone = false;
+    let lastEventTime = 0;
+
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       setUser(session?.user ?? null);
@@ -54,19 +59,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       } else {
         setIsLoading(false);
       }
+      initialLoadDone = true;
     });
 
-    // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (event, session) => {
-      // Evitar chamada duplicada do fetchUserProfile
-      if (initialLoad) {
-        initialLoad = false;
+      const now = Date.now();
+
+      if (!initialLoadDone) {
         return;
       }
+
+      if (now - lastEventTime < 1000) {
+        console.log('[AuthContext] Ignorando evento muito próximo:', event);
+        return;
+      }
+
+      lastEventTime = now;
+
+      if (event === 'INITIAL_SESSION') {
+        return;
+      }
+
+      console.log(`[AuthContext] Evento de auth: ${event}`);
+
       setSession(session);
       setUser(session?.user ?? null);
+
       if (session?.user) {
         await fetchUserProfile(session.user.id);
       } else {
@@ -83,7 +103,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   }, []);
 
   const fetchUserProfile = async (userId: string) => {
+    const now = Date.now();
+
+    if (isFetchingRef.current) {
+      console.log('[AuthContext] Fetch já em andamento, ignorando');
+      return;
+    }
+
+    if (now - lastFetchTimeRef.current < 2000) {
+      console.log('[AuthContext] Fetch muito recente, ignorando');
+      return;
+    }
+
+    fetchCountRef.current++;
+    if (fetchCountRef.current > 10) {
+      console.error('[AuthContext] Circuit breaker ativado! Muitas tentativas de fetch.');
+      setTimeout(() => {
+        fetchCountRef.current = 0;
+      }, 30000);
+      return;
+    }
+
+    isFetchingRef.current = true;
+    lastFetchTimeRef.current = now;
     setIsLoading(true);
+
     try {
       const { data, error } = await supabase
         .from("users")
@@ -147,6 +191,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setUserRoles([]);
     } finally {
       setIsLoading(false);
+      isFetchingRef.current = false;
+
+      setTimeout(() => {
+        if (fetchCountRef.current > 0) {
+          fetchCountRef.current--;
+        }
+      }, 5000);
     }
   };
 
