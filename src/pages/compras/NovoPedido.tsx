@@ -30,18 +30,12 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
   const [itemPrice, setItemPrice] = useState("");
 
   const { isVisible, isConnected, isRefreshing, connectionError, refreshConnection } = usePageVisibility();
-  const { isSubmitting, error, submitWithRetry, clearError, cancelSubmit } = useResilientSubmit({
-    maxRetries: 2,
-    retryDelay: 2000,
-    timeoutMs: 60000,
-    onRetry: (attempt, error) => {
-      console.log(`🔄 Tentativa ${attempt} falhou:`, error.message);
-    },
+  const { isSubmitting, error, submitWithRetry, clearError } = useResilientSubmit({
     onSuccess: () => {
       console.log('✅ Pedido criado com sucesso!');
     },
     onError: (error) => {
-      console.error('❌ Todas as tentativas falharam:', error);
+      console.error('❌ Erro ao criar pedido:', error);
     }
   });
 
@@ -56,12 +50,6 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
     }
   }, [open, clearError]);
 
-  // Cancelar submissão se a aba ficar oculta
-  useEffect(() => {
-    if (!isVisible && isSubmitting) {
-      cancelSubmit();
-    }
-  }, [isVisible, isSubmitting, cancelSubmit]);
 
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -86,14 +74,9 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
       alert("Usuário não autenticado");
       return;
     }
-    
+
     if (items.length === 0) {
       alert("Adicione pelo menos um item ao pedido");
-      return;
-    }
-
-    if (!isConnected) {
-      alert("Conexão perdida. Aguarde a reconexão ou recarregue a página.");
       return;
     }
 
@@ -107,99 +90,36 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       console.log("📝 Criando pedido com total:", total);
 
-      // Tentar via Edge Function primeiro (mais rápido, transacional)
-      try {
-        const invokePayload = {
-          title,
-          description,
-          user_id: user.id,
-          items: items.map(it => ({ name: it.name, quantity: it.quantity, price: Number(it.price) }))
-        };
+      // Obter token da sessão atual
+      const { data: sess } = await supabase.auth.getSession();
+      const token = (sess as any)?.session?.access_token;
 
-        console.log('🚀 Tentando criar pedido via Edge Function...');
-
-        const { data: fnData, error: fnError } = await Promise.race([
-          (supabase as any).functions.invoke('create_purchase_order', { body: invokePayload }),
-          new Promise<any>((_, reject) => setTimeout(() => reject(new Error('EDGE_FUNCTION_TIMEOUT')), 15000))
-        ]);
-
-        if (!fnError && fnData?.order?.id) {
-          console.log('✅ Pedido criado via Edge Function:', fnData.order.id);
-          return fnData.order;
-        }
-
-        console.warn('⚠️ Edge Function falhou ou timeout, usando fallback:', fnError?.message || 'timeout');
-      } catch (edgeErr: any) {
-        console.warn('⚠️ Edge Function error, usando fallback:', edgeErr?.message || edgeErr);
+      if (!token) {
+        throw new Error('Sessão inválida. Faça login novamente.');
       }
 
-      // Fallback: criar pedido via SDK ou fetch nativo
-      const createOrderDirect = async () => {
-        const { data: sess } = await supabase.auth.getSession();
-        const token = (sess as any)?.session?.access_token;
-        const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/purchase_orders`;
-        const body = [{ title, description, total_amount: total, user_id: user.id }];
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort('NATIVE_FETCH_TIMEOUT'), 20000);
-        console.log('➡️ Enviando fetch nativo (keepalive) para', url, 'payload:', body);
-        const res = await fetch(url, {
-          method: 'POST',
-          mode: 'cors',
-          cache: 'no-store',
-          referrerPolicy: 'no-referrer',
-          headers: {
-            'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'Prefer': 'return=representation',
-          },
-          body: JSON.stringify(body),
-          keepalive: true,
-          signal: controller.signal,
-        });
-        clearTimeout(timeoutId);
-        const json = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(json?.message || res.statusText);
-        }
-        return json?.[0];
-      };
+      // Criar pedido diretamente via fetch com o token atual
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/purchase_orders`;
+      const body = [{ title, description, total_amount: total, user_id: user.id }];
 
-      console.log('🔄 Usando fallback para criar pedido...');
-      let data: any = null;
+      console.log('➡️ Enviando insert direto para', url);
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation',
+        },
+        body: JSON.stringify(body),
+      });
 
-      try {
-        const sdkInsert = supabase
-          .from("purchase_orders")
-          .insert({
-            title,
-            description,
-            total_amount: total,
-            user_id: user.id,
-          })
-          .select()
-          .single();
-
-        const insertWithTimeout = Promise.race([
-          sdkInsert,
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('INSERT_TIMEOUT')), 10000)),
-        ]);
-
-        const res: any = await insertWithTimeout;
-        data = res?.data ?? res;
-        if (res?.error) throw res.error;
-
-        console.log('✅ Pedido criado via SDK:', data.id);
-      } catch (err: any) {
-        if ((err?.message || '') === 'INSERT_TIMEOUT') {
-          console.warn('⏩ SDK timeout, usando fetch nativo (keepalive)');
-          data = await createOrderDirect();
-        } else {
-          throw err;
-        }
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(json?.message || res.statusText);
       }
 
+      const data = json?.[0];
       if (!data) {
         throw new Error("Pedido não foi criado. Verifique suas permissões.");
       }
@@ -420,20 +340,13 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
             <Button 
               type="submit" 
               className="w-full h-12 text-lg bg-primary text-white font-bold rounded-md hover:bg-primary/90 transition disabled:opacity-50 disabled:cursor-not-allowed" 
-              disabled={isSubmitting || !isConnected || isRefreshing || !isVisible}
+              disabled={isSubmitting}
             >
               {isSubmitting ? (
                 <div className="flex items-center gap-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                   Salvando...
                 </div>
-              ) : isRefreshing ? (
-                <div className="flex items-center gap-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Reconectando...
-                </div>
-              ) : !isConnected ? (
-                "Conexão perdida"
               ) : (
                 "Salvar Pedido"
               )}

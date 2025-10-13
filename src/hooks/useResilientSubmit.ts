@@ -53,117 +53,36 @@ export function useResilientSubmit<T = any>(options: ResilientSubmitOptions = {}
     // Criar novo AbortController para esta operação
     abortControllerRef.current = new AbortController();
 
-    let lastError: any = null;
-
     try {
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        try {
-          console.log(`🔄 Tentativa ${attempt}/${maxRetries} de envio...`);
+      console.log('🚀 Iniciando envio direto...');
 
-          // Se a aba estiver oculta, aguardar voltar a ficar visível para evitar throttling do navegador
-          if (typeof document !== 'undefined' && document.hidden) {
-            console.log('⏸️ Aba oculta: aguardando visibilidade para enviar...');
-            await new Promise<void>((resolve, reject) => {
-              const maxWait = setTimeout(() => {
-                document.removeEventListener('visibilitychange', onVisible);
-                reject(new Error('PAGE_HIDDEN_TOO_LONG'));
-              }, 45000);
-              const onVisible = () => {
-                if (!document.hidden) {
-                  clearTimeout(maxWait);
-                  document.removeEventListener('visibilitychange', onVisible);
-                  resolve();
-                }
-              };
-              document.addEventListener('visibilitychange', onVisible);
-            });
-          }
-
-          // Verificar se a operação foi cancelada
-          if (abortControllerRef.current?.signal.aborted) {
-            console.log('Operação cancelada pelo usuário');
-            return null;
-          }
-
-          // Verificar sessão antes de cada tentativa
-          if (attempt === 1) {
-            console.log('🔐 Verificando sessão antes do envio...');
-            try {
-              const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-              if (sessionError || !session) {
-                throw new Error('Sessão inválida. Faça login novamente.');
-              }
-              console.log('🔐 Sessão válida.');
-            } catch (e: any) {
-              console.warn('⚠️ Erro ao verificar sessão:', e?.message || e);
-              throw new Error('Sessão inválida. Faça login novamente.');
-            }
-          }
-
-          // Executar a função de submit com timeout
-          const timeoutPromise = new Promise<never>((_, reject) => {
-            const timeoutId = setTimeout(() => {
-              reject(new Error(`Timeout: Operação demorou mais de ${timeoutMs}ms`));
-            }, timeoutMs);
-            
-            // Limpar timeout se a operação for cancelada
-            abortControllerRef.current?.signal.addEventListener('abort', () => {
-              clearTimeout(timeoutId);
-            });
-          });
-
-          console.log('📤 Executando submitFn com proteção de timeout...');
-          const result = await Promise.race([
-            (async () => {
-              const r = await submitFn();
-              console.log('📥 submitFn resolvido');
-              return r;
-            })(),
-            timeoutPromise
-          ]);
-
-          console.log(`✅ Sucesso na tentativa ${attempt}`);
-          onSuccess?.();
-          return result;
-
-        } catch (err: any) {
-          lastError = err;
-          console.error(`❌ Erro na tentativa ${attempt}:`, err?.message || err);
-
-          // Se não é a última tentativa, aguardar antes de tentar novamente
-          if (attempt < maxRetries) {
-            console.log(`⏳ Aguardando ${retryDelay}ms antes da próxima tentativa...`);
-            onRetry?.(attempt, err);
-            
-            // Aguardar com possibilidade de cancelamento
-            await new Promise(resolve => {
-              const timeoutId = setTimeout(resolve, retryDelay);
-              abortControllerRef.current?.signal.addEventListener('abort', () => {
-                clearTimeout(timeoutId);
-              });
-            });
-
-            // Verificar se foi cancelado durante a espera
-            if (abortControllerRef.current?.signal.aborted) {
-              console.log('Operação cancelada durante retry');
-              return null;
-            }
-          }
-        }
+      // Verificar se a operação foi cancelada
+      if (abortControllerRef.current?.signal.aborted) {
+        console.log('Operação cancelada pelo usuário');
+        return null;
       }
 
-      // Se chegou aqui, todas as tentativas falharam
-      const errorMessage = lastError?.message || 'Erro desconhecido';
-      console.error(`❌ Todas as ${maxRetries} tentativas falharam:`, errorMessage);
-      
+      // Executar a função de submit diretamente sem retry
+      console.log('📤 Executando submitFn...');
+      const result = await submitFn();
+      console.log('📥 submitFn resolvido');
+
+      console.log('✅ Sucesso no envio');
+      onSuccess?.();
+      return result;
+
+    } catch (err: any) {
+      console.error('❌ Erro no envio:', err?.message || err);
+
+      const errorMessage = err?.message || 'Erro desconhecido';
       setError(errorMessage);
-      onError?.(lastError);
-      
+      onError?.(err);
+
       return null;
     } finally {
       setIsSubmitting(false);
     }
-  }, [isSubmitting, maxRetries, retryDelay, timeoutMs, onRetry, onSuccess, onError]);
+  }, [isSubmitting, onSuccess, onError]);
 
   const cancelSubmit = useCallback(() => {
     if (abortControllerRef.current && !abortControllerRef.current.signal.aborted) {
