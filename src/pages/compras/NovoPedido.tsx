@@ -108,14 +108,36 @@ const NovoPedido: React.FC<NovoPedidoProps> = ({ open, onOpenChange, onSuccess }
 
       console.log("📝 Criando pedido com total:", total);
 
-      const { data: sess, error: sessionError } = await supabase.auth.getSession();
+      let token: string;
+      let retries = 0;
+      const maxRetries = 3;
 
-      if (sessionError || !sess?.session) {
-        throw new Error('Sessão inválida. Faça login novamente.');
+      while (retries < maxRetries) {
+        const { data: sess, error: sessionError } = await supabase.auth.getSession();
+
+        if (!sessionError && sess?.session?.access_token) {
+          token = sess.session.access_token;
+          break;
+        }
+
+        retries++;
+        console.log(`⚠️ Tentativa ${retries}: Sessão não encontrada, tentando refresh...`);
+
+        if (retries < maxRetries) {
+          try {
+            await supabase.auth.refreshSession();
+            await new Promise(resolve => setTimeout(resolve, 500));
+          } catch (e) {
+            console.warn('⚠️ Erro ao fazer refresh:', e);
+          }
+        }
       }
 
-      const token = sess.session.access_token;
-      console.log('🚀 Iniciando envio direto...');
+      if (!token!) {
+        throw new Error('Não foi possível obter uma sessão válida. Faça login novamente.');
+      }
+
+      console.log('🚀 Token obtido, iniciando envio direto...');
 
       // Criar pedido diretamente via fetch com o token atual
       const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/purchase_orders`;

@@ -38,50 +38,63 @@ export function useResilientSubmit<T = any>(options: ResilientSubmitOptions = {}
 
   const submitWithRetry = useCallback(async (submitFn: () => Promise<T>): Promise<T | null> => {
     if (isSubmitting) {
-      console.warn('Submit já em andamento, ignorando nova tentativa');
+      console.warn('[useResilientSubmit] Submit já em andamento, ignorando');
       return null;
     }
 
     setIsSubmitting(true);
     setError(null);
 
-    // Cancelar operação anterior se existir
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
 
-    // Criar novo AbortController para esta operação
     abortControllerRef.current = new AbortController();
 
-    try {
-      console.log('🚀 Iniciando envio direto...');
+    let lastError: any = null;
+    let attempts = 0;
+    const maxAttempts = 2;
 
-      // Verificar se a operação foi cancelada
-      if (abortControllerRef.current?.signal.aborted) {
-        console.log('Operação cancelada pelo usuário');
-        return null;
+    while (attempts < maxAttempts) {
+      try {
+        attempts++;
+        console.log(`[useResilientSubmit] Tentativa ${attempts}/${maxAttempts}`);
+
+        if (abortControllerRef.current?.signal.aborted) {
+          console.log('[useResilientSubmit] Operação cancelada');
+          return null;
+        }
+
+        const result = await submitFn();
+        console.log('[useResilientSubmit] ✅ Sucesso no envio');
+        onSuccess?.();
+        return result;
+
+      } catch (err: any) {
+        lastError = err;
+        console.error(`[useResilientSubmit] ❌ Erro na tentativa ${attempts}:`, err?.message || err);
+
+        if (attempts < maxAttempts) {
+          const isSessionError = err?.message?.includes('sessão') ||
+                                 err?.message?.includes('Sessão') ||
+                                 err?.message?.includes('token');
+
+          if (isSessionError) {
+            console.log('[useResilientSubmit] Erro de sessão detectado, aguardando antes de retry...');
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          } else {
+            break;
+          }
+        }
       }
-
-      // Executar a função de submit diretamente sem retry
-      console.log('📤 Executando submitFn...');
-      const result = await submitFn();
-      console.log('📥 submitFn resolvido');
-
-      console.log('✅ Sucesso no envio');
-      onSuccess?.();
-      return result;
-
-    } catch (err: any) {
-      console.error('❌ Erro no envio:', err?.message || err);
-
-      const errorMessage = err?.message || 'Erro desconhecido';
-      setError(errorMessage);
-      onError?.(err);
-
-      return null;
-    } finally {
-      setIsSubmitting(false);
     }
+
+    const errorMessage = lastError?.message || 'Erro desconhecido ao criar pedido';
+    setError(errorMessage);
+    onError?.(lastError);
+    setIsSubmitting(false);
+    return null;
+
   }, [isSubmitting, onSuccess, onError]);
 
   const cancelSubmit = useCallback(() => {

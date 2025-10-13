@@ -82,6 +82,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         return;
       }
 
+      if (event === 'SIGNED_IN') {
+        console.log('[AuthContext] SIGNED_IN - atualizando sessão sem recarregar perfil');
+        setSession(session);
+        setUser(session?.user ?? null);
+        return;
+      }
+
       console.log(`[AuthContext] Evento de auth: ${event}`);
 
       setSession(session);
